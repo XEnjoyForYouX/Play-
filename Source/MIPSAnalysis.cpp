@@ -370,7 +370,11 @@ bool CMIPSAnalysis::TryGetSJISLatinStringAtAddress(CMIPS* context, uint32 addres
 			{
 				state = DECODE_STATE_82;
 			}
-			else if(byte < 0x80)
+			else if(
+			    ((byte >= 0x20) && (byte < 0x80)) ||
+			    (byte == '\t') ||
+			    (byte == '\n') ||
+			    (byte == '\r'))
 			{
 				result += byte;
 				state = DECODE_STATE_NORMAL;
@@ -441,10 +445,11 @@ bool CMIPSAnalysis::TryGetSJISLatinStringAtAddress(CMIPS* context, uint32 addres
 	}
 	return (result.length() > 1);
 }
+
 void CMIPSAnalysis::AnalyseStringReferences()
 {
 	bool commentInserted = false;
-	for(auto subroutinePair : m_subroutines)
+	for(const auto& subroutinePair : m_subroutines)
 	{
 		const auto& subroutine = subroutinePair.second;
 		uint32 registerValue[0x20] = {0};
