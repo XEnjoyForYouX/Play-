@@ -7,7 +7,7 @@ bool CMailBox::IsPending() const
 
 void CMailBox::WaitForCall()
 {
-	std::unique_lock<std::mutex> callLock(m_callMutex);
+	std::unique_lock callLock(m_callMutex);
 	while(!IsPending())
 	{
 		m_waitCondition.wait(callLock);
@@ -16,7 +16,7 @@ void CMailBox::WaitForCall()
 
 void CMailBox::WaitForCall(unsigned int timeOut)
 {
-	std::unique_lock<std::mutex> callLock(m_callMutex);
+	std::unique_lock callLock(m_callMutex);
 	if(IsPending()) return;
 	m_waitCondition.wait_for(callLock, std::chrono::milliseconds(timeOut));
 }
@@ -29,16 +29,18 @@ void CMailBox::FlushCalls()
 void CMailBox::SendCall(const FunctionType& function, bool waitForCompletion)
 {
 	std::future<void> future;
+
 	{
-		std::unique_lock<std::mutex> callLock(m_callMutex);
 		MESSAGE message;
 		message.function = function;
 
 		if(waitForCompletion)
 		{
-			future = message.promise.get_future();
+			message.promise = std::make_unique<std::promise<void>>();
+			future = message.promise->get_future();
 		}
 
+		std::lock_guard callLock(m_callMutex);
 		m_calls.push_back(std::move(message));
 	}
 
@@ -52,11 +54,11 @@ void CMailBox::SendCall(const FunctionType& function, bool waitForCompletion)
 
 void CMailBox::SendCall(FunctionType&& function)
 {
-	std::lock_guard<std::mutex> callLock(m_callMutex);
-
 	{
 		MESSAGE message;
 		message.function = std::move(function);
+
+		std::lock_guard callLock(m_callMutex);
 		m_calls.push_back(std::move(message));
 	}
 
@@ -67,11 +69,14 @@ void CMailBox::ReceiveCall()
 {
 	MESSAGE message;
 	{
-		std::lock_guard<std::mutex> waitLock(m_callMutex);
+		std::lock_guard callLock(m_callMutex);
 		if(!IsPending()) return;
 		message = std::move(m_calls.front());
 		m_calls.pop_front();
 	}
 	message.function();
-	message.promise.set_value();
+	if(message.promise)
+	{
+		message.promise->set_value();
+	}
 }
