@@ -263,6 +263,10 @@ void CIopBios::Reset(uint32 ramSize, const Iop::SifManPtr& sifMan)
 		m_powerOff = std::make_shared<Iop::CPowerOff>(*m_sifMan);
 		RegisterModule(m_powerOff);
 	}
+	{
+		m_usbd = std::make_shared<Iop::CUsbd>(*this, m_ram);
+		RegisterModule(m_usbd);
+	}
 	RegisterModule(std::make_shared<Iop::CIomanX>(*m_ioman));
 	//RegisterModule(std::make_shared<Iop::CNaplink>(*m_sifMan, *m_ioman));
 	{
@@ -1908,6 +1912,7 @@ void CIopBios::CountTicks(uint32 ticks)
 #ifdef _IOP_EMULATE_MODULES
 	m_cdvdman->CountTicks(ticks);
 	m_mcserv->CountTicks(ticks, m_sifMan.get());
+	m_usbd->CountTicks(ticks);
 #endif
 }
 
@@ -2960,6 +2965,11 @@ Iop::CMcServ* CIopBios::GetMcServ()
 	return static_cast<Iop::CMcServ*>(m_mcserv.get());
 }
 
+Iop::CUsbd* CIopBios::GetUsbd()
+{
+	return static_cast<Iop::CUsbd*>(m_usbd.get());
+}
+
 #endif
 
 int32 CIopBios::RegisterIntrHandler(uint32 line, uint32 mode, uint32 handler, uint32 arg)
@@ -3924,8 +3934,7 @@ void CIopBios::PrepareModuleDebugInfo(CELF32& elf, const ExecutableRange& module
 			auto moduleName = ReadModuleName(address + 0xC);
 			auto module(m_modules.find(moduleName));
 
-			size_t moduleNameLength = moduleName.length();
-			uint32 entryAddress = address + 0x0C + ((moduleNameLength + 3) & ~0x03);
+			uint32 entryAddress = address + 0x14;
 			while(m_cpu.m_pMemoryMap->GetWord(entryAddress) == 0x03E00008)
 			{
 				uint32 target = m_cpu.m_pMemoryMap->GetWord(entryAddress + 4);
