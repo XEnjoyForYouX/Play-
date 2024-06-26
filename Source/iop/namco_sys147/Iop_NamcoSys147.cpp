@@ -78,6 +78,11 @@ std::string CSys147::GetFunctionName(unsigned int functionId) const
 	return "unknown";
 }
 
+void CSys147::SetIoMode(IO_MODE ioMode)
+{
+	m_ioMode = ioMode;
+}
+
 void CSys147::SetButton(unsigned int switchIndex, unsigned int padNumber, PS2::CControllerInfo::BUTTON button)
 {
 	m_switchBindings[{padNumber, button}] = switchIndex;
@@ -89,6 +94,88 @@ void CSys147::SetButtonState(unsigned int padNumber, PS2::CControllerInfo::BUTTO
 	if(binding != std::end(m_switchBindings))
 	{
 		m_switchStates[binding->second] = pressed ? 0xFF : 0x00;
+	}
+
+	if(m_ioMode == IO_MODE::AI)
+	{
+		//Player Switches
+		//4 nibbles, one for each player
+		//In one nibble:
+		//Bit 0 - Up
+		//Bit 1 - Down
+		//Bit 2 - Right
+		//Bit 3 - Left
+
+		//System Switches
+		//Bit 0  - Select Down
+		//Bit 1  - Select Up
+		//Bit 2  - Enter
+		//Bit 3  - Test
+		//Bit 5  - Service
+		//Bit 8  - P4 Enter
+		//Bit 9  - P3 Enter
+		//Bit 10 - P2 Enter
+		//Bit 11 - P1 Enter
+		uint16 systemSwitchMask = 0;
+		uint16 playerSwitchMask = 0;
+		if(padNumber == 0)
+		{
+			switch(button)
+			{
+			case PS2::CControllerInfo::L1:
+				systemSwitchMask = 0x0008; //Test Button
+				break;
+			case PS2::CControllerInfo::DPAD_UP:
+				systemSwitchMask = 0x0002; //Select Up
+				playerSwitchMask = 0x1000; //P1 Up
+				break;
+			case PS2::CControllerInfo::DPAD_DOWN:
+				systemSwitchMask = 0x0001; //Select Down
+				playerSwitchMask = 0x2000; //P1 Down
+				break;
+			case PS2::CControllerInfo::DPAD_LEFT:
+				playerSwitchMask = 0x8000; //P1 Left
+				break;
+			case PS2::CControllerInfo::DPAD_RIGHT:
+				playerSwitchMask = 0x4000; //P1 Right
+				break;
+			case PS2::CControllerInfo::CROSS:
+				systemSwitchMask = 0x0804; //P1 Start + Enter
+				break;
+			default:
+				break;
+			}
+		}
+		else if(padNumber == 1)
+		{
+			switch(button)
+			{
+			case PS2::CControllerInfo::DPAD_UP:
+				playerSwitchMask = 0x0010; //P2 Up
+				break;
+			case PS2::CControllerInfo::DPAD_DOWN:
+				playerSwitchMask = 0x0020; //P2 Down
+				break;
+			case PS2::CControllerInfo::DPAD_LEFT:
+				playerSwitchMask = 0x0080; //P2 Left
+				break;
+			case PS2::CControllerInfo::DPAD_RIGHT:
+				playerSwitchMask = 0x0040; //P2 Right
+				break;
+			case PS2::CControllerInfo::CROSS:
+				systemSwitchMask = 0x0400; //P2 Start
+				break;
+			default:
+				break;
+			}
+		}
+		m_systemSwitchState &= ~systemSwitchMask;
+		m_playerSwitchState &= ~playerSwitchMask;
+		if(!pressed)
+		{
+			m_systemSwitchState |= systemSwitchMask;
+			m_playerSwitchState |= playerSwitchMask;
+		}
 	}
 }
 
@@ -138,6 +225,20 @@ bool CSys147::Invoke003(uint32 method, uint32* args, uint32 argsSize, uint32* re
 {
 	switch(method)
 	{
+	case 4:
+	{
+		//Read RTC
+		assert(argsSize == 0x10);
+		assert(retSize == 0x20);
+		ret[0] = 0x24; //Year
+		ret[1] = 0x02; //Month
+		ret[2] = 0x07; //Day
+		ret[3] = 0x01; //Day of Week (?)
+		ret[4] = 0x04; //Hours
+		ret[5] = 0x04; //Minutes
+		ret[6] = 0x05; //Seconds;
+	}
+	break;
 	default:
 		CLog::GetInstance().Warn(LOG_NAME, "Unknown method invoked (0x%08X, 0x%08X).\r\n", 0x003, method);
 		break;
@@ -224,7 +325,7 @@ bool CSys147::Invoke99(uint32 method, uint32* args, uint32 argsSize, uint32* ret
 
 			//0x0D -> ???
 			//0x0F -> Get PCB info
-			//0x10 -> ???
+			//0x10 -> System Switches (?)
 			//0x18 -> Switch
 			//0x38 -> SCI
 			//0x39 -> ???
@@ -274,6 +375,16 @@ bool CSys147::Invoke99(uint32 method, uint32* args, uint32 argsSize, uint32* ret
 				MODULE_99_PACKET reply = {};
 				reply.type = 2;
 				reply.command = 0x58;
+				reply.data[0] = packet->data[0];
+				reply.checksum = ComputePacketChecksum(reply);
+				m_pendingReplies.emplace_back(reply);
+			}
+			else if(packet->command == 0xD8)
+			{
+				//???
+				MODULE_99_PACKET reply = {};
+				reply.type = 2;
+				reply.command = 0xD8;
 				reply.data[0] = packet->data[0];
 				reply.checksum = ComputePacketChecksum(reply);
 				m_pendingReplies.emplace_back(reply);
@@ -390,12 +501,41 @@ bool CSys147::Invoke99(uint32 method, uint32* args, uint32 argsSize, uint32* ret
 			}
 			else if(packet->command == 0x10)
 			{
-				MODULE_99_PACKET reply = {};
-				reply.type = 2;
-				reply.command = 0x10;
-				reply.data[0] = packet->data[0];
-				reply.checksum = ComputePacketChecksum(reply);
-				m_pendingReplies.emplace_back(reply);
+				//Some kind of I/O device related response
+				//Animal Kaiser uses this for dispenser
+				//Pac Man Battle Royale uses this for switch state
+				if(m_ioMode == IO_MODE::AI)
+				{
+					{
+						MODULE_99_PACKET reply = {};
+						reply.type = 2;
+						reply.command = 0x10;
+						reply.data[0] = static_cast<uint8>(m_systemSwitchState);
+						reply.data[1] = static_cast<uint8>(m_systemSwitchState >> 8);
+						reply.checksum = ComputePacketChecksum(reply);
+						m_pendingReplies.emplace_back(reply);
+					}
+
+					{
+						MODULE_99_PACKET reply = {};
+						reply.type = 3;
+						reply.command = 0x10;
+						reply.data[0x32] = 0x20;
+						reply.data[0x36] = static_cast<uint8>(m_playerSwitchState);
+						reply.data[0x37] = static_cast<uint8>(m_playerSwitchState >> 8);
+						reply.checksum = ComputePacketChecksum(reply);
+						m_pendingReplies.emplace_back(reply);
+					}
+				}
+				else
+				{
+					MODULE_99_PACKET reply = {};
+					reply.type = 2;
+					reply.command = 0x10;
+					reply.data[0] = packet->data[0];
+					reply.checksum = ComputePacketChecksum(reply);
+					m_pendingReplies.emplace_back(reply);
+				}
 			}
 			reinterpret_cast<uint16*>(ret)[0] = 1;
 		}
@@ -408,8 +548,24 @@ bool CSys147::Invoke99(uint32 method, uint32* args, uint32 argsSize, uint32* ret
 		CLog::GetInstance().Warn(LOG_NAME, "LINK_09000002();\r\n");
 		reinterpret_cast<uint16*>(ret)[0] = 0;
 		break;
+	case 0x09000003:
+		CLog::GetInstance().Warn(LOG_NAME, "LINK_09000003();\r\n");
+		reinterpret_cast<uint16*>(ret)[0] = 0;
+		break;
 	case 0x0C000002:
 		CLog::GetInstance().Warn(LOG_NAME, "LINK_0C000002();\r\n");
+		reinterpret_cast<uint16*>(ret)[0] = 0;
+		break;
+	case 0x0C000003:
+		CLog::GetInstance().Warn(LOG_NAME, "LINK_0C000003();\r\n");
+		reinterpret_cast<uint16*>(ret)[0] = 0;
+		break;
+	case 0x0D003803:
+		CLog::GetInstance().Warn(LOG_NAME, "LINK_0D003803();\r\n");
+		reinterpret_cast<uint16*>(ret)[0] = 0;
+		break;
+	case 0x11000000:
+		CLog::GetInstance().Warn(LOG_NAME, "LINK_11000000();\r\n");
 		reinterpret_cast<uint16*>(ret)[0] = 0;
 		break;
 	default:
