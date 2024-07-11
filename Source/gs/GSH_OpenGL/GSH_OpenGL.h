@@ -248,6 +248,9 @@ private:
 	typedef std::shared_ptr<CFramebuffer> FramebufferPtr;
 	typedef std::vector<FramebufferPtr> FramebufferList;
 
+        typedef std::shared_ptr<Framework::CBitmap> BitmapPtr;
+	typedef std::vector<BitmapPtr> BitmapList;
+
 	class CDepthbuffer
 	{
 	public:
@@ -366,6 +369,7 @@ private:
 
 	FramebufferPtr FindFramebuffer(const FRAME&) const;
 	DepthbufferPtr FindDepthbuffer(const ZBUF&, const FRAME&) const;
+        BitmapPtr FindOrCreateBitmap(const FramebufferPtr&, uint32);
 
 	void DumpTexture(unsigned int, unsigned int, uint32);
 
@@ -428,6 +432,7 @@ private:
 	PaletteList m_paletteCache;
 	FramebufferList m_framebuffers;
 	DepthbufferList m_depthbuffers;
+        BitmapList m_bitmaps;
 
 	Framework::OpenGl::CBuffer m_primBuffer;
 	Framework::OpenGl::CVertexArray m_primVertexArray;
