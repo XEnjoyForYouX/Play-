@@ -9,6 +9,17 @@
 #include "../Profiler.h"
 #include "zip/ZipArchiveWriter.h"
 #include "zip/ZipArchiveReader.h"
+#include "SimdDefs.h"
+
+#ifdef FRAMEWORK_SIMD_USE_SSE
+#include <emmintrin.h>
+#endif
+
+#ifdef _MSC_VER
+#define FRAMEWORK_SAFE_BUFFERS __declspec(safebuffers)
+#else
+#define FRAMEWORK_SAFE_BUFFERS
+#endif
 
 class CINTC;
 
@@ -156,7 +167,7 @@ protected:
 		}
 
 		template <size_t ValueSize>
-		inline void ReadValue(void* buffer)
+		inline FRAMEWORK_SAFE_BUFFERS void ReadValue(void* buffer)
 		{
 			//Hyper-specialized version of Read that allows the compiler to better
 			//optimize the code. Will only work with reads of at most 16 bytes.
@@ -317,7 +328,7 @@ protected:
 	void Cmd_STCOL(StreamType&, CODE);
 	void Cmd_STMASK(StreamType&, CODE);
 
-	inline uint32 GetMaskOp(unsigned int, unsigned int) const;
+	inline uint32 GetColMaskOp(unsigned int) const;
 
 	inline bool Unpack_S32(StreamType& stream, uint128& result)
 	{
@@ -577,41 +588,55 @@ protected:
 			if(mustWrite)
 			{
 				auto dst = reinterpret_cast<uint128*>(vuMem + nDstAddr);
+				uint32 col = (m_writeTick > 3) ? 3 : m_writeTick;
+				uint32 colMask = useMask ? GetColMaskOp(col) : 0;
 
-				for(unsigned int i = 0; i < 4; i++)
+				if((colMask == 0) && (mode == 0))
 				{
-					uint32 maskOp = useMask ? GetMaskOp(i, m_writeTick) : MASK_DATA;
+					(*dst) = writeValue;
+				}
+#ifdef FRAMEWORK_SIMD_USE_SSE
+				else if((colMask == 0) && (mode == MODE_OFFSET))
+				{
+					*reinterpret_cast<__m128i*>(dst) = _mm_add_epi32(*reinterpret_cast<__m128i*>(&writeValue), *reinterpret_cast<__m128i*>(&m_R));
+				}
+#endif
+				else
+				{
+					for(unsigned int i = 0; i < 4; i++)
+					{
+						uint32 maskOp = useMask ? (colMask >> (i * 2)) & 0x3 : MASK_DATA;
 
-					if(maskOp == MASK_DATA)
-					{
-						if(mode == MODE_OFFSET)
+						if(maskOp == MASK_DATA)
 						{
-							writeValue.nV[i] += m_R[i];
-						}
-						else if(mode == MODE_DIFFERENCE)
-						{
-							writeValue.nV[i] += m_R[i];
-							m_R[i] = writeValue.nV[i];
-						}
+							if(mode == MODE_OFFSET)
+							{
+								writeValue.nV[i] += m_R[i];
+							}
+							else if(mode == MODE_DIFFERENCE)
+							{
+								writeValue.nV[i] += m_R[i];
+								m_R[i] = writeValue.nV[i];
+							}
 
-						dst->nV[i] = writeValue.nV[i];
-					}
-					else if(maskOp == MASK_ROW)
-					{
-						dst->nV[i] = m_R[i];
-					}
-					else if(maskOp == MASK_COL)
-					{
-						int index = (m_writeTick > 3) ? 3 : m_writeTick;
-						dst->nV[i] = m_C[index];
-					}
-					else if(maskOp == MASK_MASK)
-					{
-						//Don't write anything
-					}
-					else
-					{
-						assert(0);
+							dst->nV[i] = writeValue.nV[i];
+						}
+						else if(maskOp == MASK_ROW)
+						{
+							dst->nV[i] = m_R[i];
+						}
+						else if(maskOp == MASK_COL)
+						{
+							dst->nV[i] = m_C[col];
+						}
+						else if(maskOp == MASK_MASK)
+						{
+							//Don't write anything
+						}
+						else
+						{
+							assert(0);
+						}
 					}
 				}
 
@@ -691,7 +716,7 @@ protected:
 	CODE m_CODE;
 	uint8 m_NUM;
 	uint32 m_MODE;
-	uint32 m_R[4];
+	alignas(16) uint32 m_R[4];
 	uint32 m_C[4];
 	uint32 m_MASK;
 	uint32 m_MARK;
