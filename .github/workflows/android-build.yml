@@ -1,0 +1,71 @@
+name: play-android-build-alternative
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'select branch to build(default: master)'
+        required: false
+        default: 'master'
+
+jobs:
+  play_android_build:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/setup-java@v4
+      with:
+        distribution: adopt
+        java-version: 17
+
+    - name: Download Play source code
+      run: |
+        cd ${{ github.workspace }}
+        git clone --branch ${{ github.event.inputs.branch || 'master' }} https://github.com/XEnjoyForYouX/Play-.git --recursive
+        cd Play-
+        
+
+    - id: version
+      name: Get version
+      run: |
+        echo "date=$(/bin/date -u "+%Y%m%d")" >> $GITHUB_OUTPUT
+        cd ${{ github.workspace }}/Play-
+        echo "hash=$(git log -1 --pretty=format:%H)" >> $GITHUB_OUTPUT
+        echo "short_hash=$(git describe --always --long)" >> $GITHUB_OUTPUT
+        echo "version=$(git describe --tags --always)" >> $GITHUB_OUTPUT
+
+    - name: Set up cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-Play-${{ steps.version.outputs.hash }}
+        restore-keys: |
+            ${{ runner.os }}-Play-
+
+    - name: Prepare environment
+      run: |
+        sudo apt-get install -y ninja-build
+          ln -s /usr/bin/ninja .
+    - name: Build Android
+      run: |
+        cd ${{ github.workspace }}/Play-/build_android
+        chmod +x ./gradlew
+        ./gradlew "assembleRelease"
+        # bash gradlew build
+        mv $(find build_android/build/outputs/apk/release/Play-release-unsigned.apk -type f | grep -E "\.apk$") ${{ github.workspace }}/Play-release-unsigned-${{ steps.version.outputs.date }}-${{ steps.version.outputs.version }}.apk
+
+    - name: Release Play (Play)
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Play ${{ steps.version.outputs.date }}
+        tag_name: Play
+        files: ${{ github.workspace }}/Play-release-unsigned-${{ steps.version.outputs.date }}-${{ steps.version.outputs.version }}.apk
+
+    - name: Release Play ${{ steps.version.outputs.date }}
+      uses: softprops/action-gh-release@v2
+      with:
+        name: ${{ steps.version.outputs.date }}
+        tag_name: ${{ steps.version.outputs.date }}
+        files: ${{ github.workspace }}/Play-release-unsigned-${{ steps.version.outputs.date }}-${{ steps.version.outputs.version }}.apk
